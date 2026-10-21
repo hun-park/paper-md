@@ -1,0 +1,13 @@
+{
+  "name": "paper-md",
+  "description": "Convert paper PDFs to markdown with equations restored (docling + PyMuPDF).",
+  "owner": { "name": "hun-park" },
+  "plugins": [
+    {
+      "name": "paper-md",
+      "description": "refs-md skill: PDF to markdown cache for reference papers.",
+      "source": "./plugins/paper-md",
+      "category": "research"
+    }
+  ]
+}
