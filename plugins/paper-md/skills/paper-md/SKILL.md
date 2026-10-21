@@ -1,9 +1,9 @@
 ---
-name: refs-md
+name: paper-md
 description: refs/md/<stem>.md를 원본 PDF에서 생성한다 — ① docling으로 구조화된 markdown 추출 ② pymupdf로 수식 복원. refs/에서 논문을 읽어야 하는데 md/<stem>.md가 없을 때, 기존 md를 다시 만들 때, "캐시에 저장", "md로 저장", "pdf를 md로" 요청에 쓴다. 발췌 메모·요약을 md/에 손으로 쓰지 말 것 — md/에는 이 스킬의 산출물만 둔다.
 ---
 
-# REFS 캐시 생성 (PDF → md)
+# paper-md: REFS 캐시 생성 (PDF → md)
 
 `refs/`는 read-through 캐시다. `md/<stem>.md`가 있으면 그것을 읽고, 없으면 원본 PDF(`cited/` = 본문이 `\cite`하는 것, stem은 bib 키 / `related/` = 인용하지 않는 것)를 이 스킬로 변환해 `md/<stem>.md`에 저장한다.
 
@@ -13,7 +13,7 @@ description: refs/md/<stem>.md를 원본 PDF에서 생성한다 — ① docling�
 
 ```bash
 S=${CLAUDE_SKILL_DIR}
-uv run $S/refs_md.py <pdf> <out.md> \
+uv run $S/paper_md.py <pdf> <out.md> \
     --cite "<저자> <연도>, <학술지> <권>(<호>):<쪽>, DOI <doi>" \
     [--pages 3-9] [--glyph FONT:0xHH=CHAR ...] [--fitz-dump <scratchpad>/<stem>.fitz.txt] [--force]
 ```
@@ -22,7 +22,7 @@ uv run $S/refs_md.py <pdf> <out.md> \
 - `--pages a-b`는 발췌. 헤더에 `p.a-b 발췌`로 적힌다.
 - 기존 md가 있으면 멈춘다. `--force`로 덮어쓴다.
 - `--fitz-dump`는 pymupdf 페이지 본문(`<<<pN>>>` 구분)을 쓴다. 수식 확인 참조용이며 `md/` 밖에 둔다.
-- 자가검증: `uv run $S/refs_md.py --selftest`.
+- 자가검증: `uv run $S/paper_md.py --selftest`.
 
 스크립트가 하는 일:
 
@@ -50,8 +50,8 @@ uv run $S/refs_md.py <pdf> <out.md> \
 
 수식 기호가 엉뚱한 글자로 나올 때:
 
-1. `refs_md.py --scan <pdf>` — 의심 (폰트, 코드)를 건수·예시와 함께 센다.
-2. `refs_md.py --crop <pdf> FONT:0xHH[:n] <out.png>` — 그 자리를 잘라 본다.
+1. `paper_md.py --scan <pdf>` — 의심 (폰트, 코드)를 건수·예시와 함께 센다.
+2. `paper_md.py --crop <pdf> FONT:0xHH[:n] <out.png>` — 그 자리를 잘라 본다.
 3. `--glyph FONT:0xHH=CHAR`로 검증한 매핑을 전달한다.
 4. **문서·폰트 단위로만** 매핑한다. 같은 코드도 폰트마다 다르다.
 

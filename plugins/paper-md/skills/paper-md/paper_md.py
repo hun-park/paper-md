@@ -1,15 +1,18 @@
 #!/usr/bin/env -S uv run --script
 # /// script
-# requires-python = ">=3.10"
-# dependencies = ["docling", "pymupdf"]
+# requires-python = "==3.12.*"
+# dependencies = ["docling==2.129.0", "pymupdf==1.27.2.3"]
+#
+# [tool.uv]
+# exclude-newer = "2026-10-22T00:00:00Z"
 # ///
 """REFS 캐시 생성 — PDF → md.  ① docling 본문 구조  ② pymupdf 수식·글리프 보완.
 
 usage:
-  refs_md.py <pdf> <out.md> --cite "..." [--pages 3-9] [--glyph FONT:0xHH=CHAR ...] [--fitz-dump PATH] [--force]
-  refs_md.py --scan <pdf>                         # 글리프 판정: 의심 (폰트, 코드) 집계
-  refs_md.py --crop <pdf> FONT:0xHH[:n] <out.png>  # 글리프 판정: 그 자리를 잘라 본다
-  refs_md.py --selftest
+  paper_md.py <pdf> <out.md> --cite "..." [--pages 3-9] [--glyph FONT:0xHH=CHAR ...] [--fitz-dump PATH] [--force]
+  paper_md.py --scan <pdf>                         # 글리프 판정: 의심 (폰트, 코드) 집계
+  paper_md.py --crop <pdf> FONT:0xHH[:n] <out.png>  # 글리프 판정: 그 자리를 잘라 본다
+  paper_md.py --selftest
 
 pymupdf 보완(결정적인 것만):
   - docling이 <!-- formula-not-decoded -->로 남긴 수식을 pymupdf 텍스트에서 복원
