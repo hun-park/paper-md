@@ -13,7 +13,7 @@ description: refs/md/<stem>.md를 원본 PDF에서 생성한다 — ① docling�
 
 ```bash
 S=${CLAUDE_SKILL_DIR}
-uv run $S/paper_md.py <pdf> <out.md> \
+uv run --script --locked $S/paper_md.py <pdf> <out.md> \
     --cite "<저자> <연도>, <학술지> <권>(<호>):<쪽>, DOI <doi>" \
     [--pages 3-9] [--glyph FONT:0xHH=CHAR ...] [--fitz-dump <scratchpad>/<stem>.fitz.txt] [--force]
 ```
@@ -22,7 +22,7 @@ uv run $S/paper_md.py <pdf> <out.md> \
 - `--pages a-b`는 발췌. 헤더에 `p.a-b 발췌`로 적힌다.
 - 기존 md가 있으면 멈춘다. `--force`로 덮어쓴다.
 - `--fitz-dump`는 pymupdf 페이지 본문(`<<<pN>>>` 구분)을 쓴다. 수식 확인 참조용이며 `md/` 밖에 둔다.
-- 자가검증: `uv run $S/paper_md.py --selftest`.
+- 자가검증: `uv run --script --locked $S/paper_md.py --selftest`.
 
 스크립트가 하는 일:
 

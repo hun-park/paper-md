@@ -109,7 +109,19 @@ def convert(pdf, pages=None, gmap=None):
     n = doc.page_count
 
     # ① docling 본문 추출
-    converter = DocumentConverter()
+    import warnings
+    import torch
+    from docling.datamodel.accelerator_options import AcceleratorOptions
+    from docling.datamodel.base_models import InputFormat
+    from docling.datamodel.pipeline_options import PdfPipelineOptions
+    from docling.document_converter import PdfFormatOption
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+    print(f"[device] {device}", file=sys.stderr)
+    opts = PdfPipelineOptions(accelerator_options=AcceleratorOptions(device=device))
+    converter = DocumentConverter(format_options={InputFormat.PDF: PdfFormatOption(pipeline_options=opts)})
     result = converter.convert(pdf_path)
     body = result.document.export_to_markdown()
 
