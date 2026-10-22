@@ -21,7 +21,7 @@ uv run --script --locked ${CLAUDE_SKILL_DIR}/paper_md.py <pdf> <out.md> \
 
 | 단계 | 내용 |
 |---|---|
-| 장치·OCR 판정 | CUDA가 있으면 GPU, 없으면 CPU. 처음·중간·끝 쪽을 표본으로, 글자가 100자 미만인 쪽이 절반 이상이거나 텍스트 레이어와 OCR 결과의 유사도(0.5 이상)가 맞는 쪽이 절반 미만이면 RapidOCR과 docling 수식 인식(LaTeX `$$…$$`)을 켠다. stderr에 `[device]`, `[ocr] on/off (사유)` |
+| 장치·OCR 판정 | CUDA가 있으면 GPU, 없으면 CPU. 글자가 100자 미만인 쪽이 절반 이상이면 스캔본으로 보고 RapidOCR과 docling 수식 인식(LaTeX `$$…$$`)을 켠다. stderr에 `[device]`, `[ocr] on/off (사유)` |
 | docling 본문 추출 | 섹션·리스트·캡션이 분리된 markdown. 수식은 `<!-- formula-not-decoded -->`로 남는다 |
 | PyMuPDF 수식 복원 | 자리표시자마다 docling이 준 쪽 위치(bbox)의 PyMuPDF 텍스트(글리프 매핑 적용)로 교체. 자리표시자 수와 수식 수가 다르면 교체하지 않는다 |
 | 정리 | 하이픈 병합, 리가처, 특수 공백·soft hyphen 정규화 |

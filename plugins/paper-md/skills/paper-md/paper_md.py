@@ -18,15 +18,14 @@
 """
 Spec: PDF to one markdown cache file. docling gives the structure, PyMuPDF restores the text of
 formulas docling leaves undecoded (matched by page position) and fixes ligatures, hyphenation and
-unreadable glyphs. PDFs whose text layer is missing or disagrees with OCR use RapidOCR and docling formula recognition.
+unreadable glyphs. PDFs with almost no text layer use RapidOCR and docling formula recognition.
 Goal: a deterministic file whose unresolved spots are reported in the side-car, never guessed.
 """
-import argparse, collections, difflib, logging, os, re, sys, tempfile, warnings
+import argparse, collections, logging, os, re, sys, tempfile, warnings
 
 UNDECODED = "<!-- formula-not-decoded -->"
 MARK = "⟦?⟧"
 SPARSE_CHARS_PER_PAGE = 100
-LAYER_MATCH_RATIO = 0.5
 BAR = "=" * 70
 LIGATURES = {"ﬀ": "ff", "ﬁ": "fi", "ﬂ": "fl", "ﬃ": "ffi", "ﬄ": "ffl", "ﬅ": "st", "ﬆ": "st"}
 SPACES = {"\u2011": "-", "\u00ad": "", "\u00a0": " ", "\u2002": " ", "\u2009": " ", "\u200a": " ", "\u202f": " "}
@@ -122,38 +121,9 @@ def sparse_pages(pdf_doc):
     return [n for n, page in enumerate(pdf_doc) if len(page.get_text()) < SPARSE_CHARS_PER_PAGE]
 
 
-def text_similarity(a, b):
-    a, b = (re.sub(r"[^a-z0-9]", "", s.lower()) for s in (a, b))
-    return difflib.SequenceMatcher(None, a, b, autojunk=False).ratio() if a and b else 0.0
-
-
-def ocr_page_texts(pdf_doc, indices, device, workdir):
-    import fitz
-
-    sample = fitz.open()
-    for i in indices:
-        sample.insert_pdf(pdf_doc, from_page=i, to_page=i)
-    path = os.path.join(workdir, "sample.pdf")
-    sample.save(path)
-    document = docling_converter(device, ocr=True, formulas=False).convert(path).document
-    texts = collections.defaultdict(list)
-    for item in document.texts:
-        texts[item.prov[0].page_no].append(item.text)
-    return [" ".join(texts[n + 1]) for n in range(len(indices))]
-
-
-def needs_ocr(pdf_doc, device, workdir):
-    last = pdf_doc.page_count - 1
-    sampled = sorted({0, last // 2, last})
-    layers = {i: pdf_doc[i].get_text() for i in sampled}
-    empty = [i for i in sampled if len(layers[i]) < SPARSE_CHARS_PER_PAGE]
-    if len(empty) * 2 >= len(sampled):
-        return True, f"표본 {len(sampled)}쪽 중 {len(empty)}쪽에 텍스트 레이어 없음"
-    kept = [i for i in sampled if i not in empty]
-    ratios = [text_similarity(layers[i], ocr) for i, ocr in zip(kept, ocr_page_texts(pdf_doc, kept, device, workdir))]
-    agreeing = sum(r >= LAYER_MATCH_RATIO for r in ratios)
-    detail = "텍스트 레이어와 OCR 유사도 " + ", ".join(f"{r:.2f}" for r in ratios)
-    return agreeing * 2 < len(ratios), detail
+def needs_ocr(pdf_doc):
+    thin = len(sparse_pages(pdf_doc))
+    return thin * 2 >= pdf_doc.page_count, f"글자 {SPARSE_CHARS_PER_PAGE}자 미만 쪽 {thin}/{pdf_doc.page_count}"
 
 
 def pick_device():
@@ -193,7 +163,7 @@ def convert(pdf, pages, glyph_map):
     with tempfile.TemporaryDirectory() as workdir:
         pdf_doc, path, first = select_pages(pdf, pages, workdir)
         device = pick_device()
-        scanned, why = needs_ocr(pdf_doc, device, workdir)
+        scanned, why = needs_ocr(pdf_doc)
         print(f"[device] {device}\n[ocr] {'on' if scanned else 'off'} ({why})", file=sys.stderr)
         document = docling_converter(device, ocr=scanned, formulas=scanned).convert(path).document
 
@@ -279,14 +249,12 @@ def selftest():
     assert fill_formulas(f"a {UNDECODED} b {UNDECODED} c", ["x=1", "y=2"]) == ("a x=1 b y=2 c", 2)
     assert fill_formulas(f"a {UNDECODED} b {UNDECODED} c", ["x=1", ""]) == (f"a x=1 b {UNDECODED} c", 1)
     assert fill_formulas(f"a {UNDECODED} b", ["x=1", "y=2"]) == (f"a {UNDECODED} b", 0)
-    assert text_similarity("Hello, World 1", "hello world 1") == 1.0 and text_similarity("abc", "") == 0.0
-    assert text_similarity("battery model voltage", "zzzz qqqq xxxx") < LAYER_MATCH_RATIO
     import fitz
 
     blank = fitz.open()
     for _ in range(3):
         blank.new_page()
-    assert needs_ocr(blank, "cpu", "")[0] is True and sparse_pages(blank) == [0, 1, 2]
+    assert needs_ocr(blank)[0] is True and sparse_pages(blank) == [0, 1, 2]
     with tempfile.TemporaryDirectory() as workdir:
         blank.save(os.path.join(workdir, "b.pdf"))
         for bad in ("3", "3-2", "0-1", "2-9", "a-b"):
