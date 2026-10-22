@@ -21,7 +21,7 @@ formulas docling leaves undecoded (matched by page position) and fixes ligatures
 unreadable glyphs. Scanned PDFs have no text layer, so they use RapidOCR and docling formula recognition.
 Goal: a deterministic file whose unresolved spots are reported in the side-car, never guessed.
 """
-import argparse, collections, os, re, sys, tempfile
+import argparse, collections, logging, os, re, sys, tempfile, warnings
 
 UNDECODED = "<!-- formula-not-decoded -->"
 MARK = "⟦?⟧"
@@ -35,6 +35,13 @@ BRACKET_PIECES = dict(zip(range(0xF8EB, 0xF8FF), "⎛⎜⎝⎡⎢⎣⎧⎨⎩⎪
 FONT_GLYPHS = {"CMEX10": {0x00: "(", 0x01: ")", 0x02: "[", 0x03: "]", 0x04: "⌊", 0x05: "⌋", 0x06: "⌈", 0x07: "⌉",
                           0x08: "{", 0x09: "}", 0x0A: "⟨", 0x0B: "⟩", 0x0C: "|", 0x0D: "‖", 0x0E: "/", 0x0F: "\\",
                           0x10: "(", 0x11: ")", 0x12: "(", 0x13: ")", 0x14: "[", 0x15: "]", 0x1A: "{", 0x1B: "}"}}
+
+
+def silence_known_noise():
+    os.environ.update(TQDM_DISABLE="1", TRANSFORMERS_VERBOSITY="error", HF_HUB_DISABLE_PROGRESS_BARS="1")
+    warnings.filterwarnings("ignore", category=SyntaxWarning)
+    warnings.filterwarnings("ignore", message="Using padding='same'", category=UserWarning)
+    logging.getLogger("docling.datamodel.stage_model_specs").addFilter(lambda r: "already registered" not in r.getMessage())
 
 
 def font_name(span):
@@ -112,7 +119,7 @@ def is_scanned(pdf_doc):
 
 
 def pick_device():
-    import torch, warnings
+    import torch
 
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
@@ -240,6 +247,7 @@ def main():
         return scan(argv[1])
     if argv[:1] == ["--crop"]:
         return crop(*argv[1:4])
+    silence_known_noise()
     parser = argparse.ArgumentParser()
     parser.add_argument("pdf")
     parser.add_argument("out")
