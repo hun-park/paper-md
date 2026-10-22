@@ -28,6 +28,7 @@ uv run --script --locked $S/paper_md.py <pdf> <out.md> \
 
 | 단계 | 내용 |
 |---|---|
+| OCR 자동 판정 | 쪽당 글자 수가 100 미만이면 스캔본으로 보고 RapidOCR(torch)로 전체 쪽 OCR, 아니면 끈다. stderr에 `[ocr] on/off` |
 | docling 본문 추출 | PDF → 구조화된 markdown (섹션·리스트·캡션 분리). 수식은 `<!-- formula-not-decoded -->`로 표시 |
 | PyMuPDF 수식 복원 | `<!-- formula-not-decoded -->` 자리표시자를 PyMuPDF에서 추출한 번호 붙은 수식 텍스트로 교체 |
 | 하이픈 병합·리가처·특수 공백 | `com-\nplex`→`complex`, `ﬁ`→`fi`, 비분리 하이픈·soft hyphen·얇은 공백 정규화 |

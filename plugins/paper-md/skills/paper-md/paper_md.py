@@ -1,7 +1,7 @@
 #!/usr/bin/env -S uv run --script
 # /// script
 # requires-python = "==3.12.*"
-# dependencies = ["docling==2.129.0", "pymupdf==1.27.2.3", "torch==2.11.0", "torchvision==0.26.0"]
+# dependencies = ["docling==2.129.0", "pymupdf==1.27.2.3", "torch==2.11.0", "torchvision==0.26.0", "rapidocr==3.9.2"]
 #
 # [tool.uv]
 # exclude-newer = "2026-10-22T00:00:00Z"
@@ -37,6 +37,7 @@ WORD = re.compile(r"[A-Za-z]+")
 HYPH = re.compile(r"(?<=[a-z])- *\n(?=[a-z])")
 EQ = re.compile(r"^\((\d{1,3})\)\s*\n|\((\d{1,3})\)\s*$")
 MARK = "⟦?⟧"
+SCANNED_CHARS_PER_PAGE = 100
 PUA = dict(zip(range(0xF8EB, 0xF8FF), "⎛⎜⎝⎡⎢⎣⎧⎨⎩⎪⎮⎞⎟⎠⎤⎥⎦⎫⎬⎭"))
 FONT = {"CMEX10": {0x00: "(", 0x01: ")", 0x02: "[", 0x03: "]", 0x04: "⌊", 0x05: "⌋", 0x06: "⌈", 0x07: "⌉",
                    0x08: "{", 0x09: "}", 0x0A: "⟨", 0x0B: "⟩", 0x0C: "|", 0x0D: "‖", 0x0E: "/", 0x0F: "\\",
@@ -122,14 +123,18 @@ def convert(pdf, pages=None, gmap=None):
     import torch
     from docling.datamodel.accelerator_options import AcceleratorOptions
     from docling.datamodel.base_models import InputFormat
-    from docling.datamodel.pipeline_options import PdfPipelineOptions
+    from docling.datamodel.pipeline_options import PdfPipelineOptions, RapidOcrOptions
     from docling.document_converter import PdfFormatOption
 
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
         device = "cuda" if torch.cuda.is_available() else "cpu"
     print(f"[device] {device}", file=sys.stderr)
-    opts = PdfPipelineOptions(accelerator_options=AcceleratorOptions(device=device))
+    scanned = sum(len(p.get_text()) for p in doc) / n < SCANNED_CHARS_PER_PAGE
+    print(f"[ocr] {'on' if scanned else 'off'}", file=sys.stderr)
+    opts = PdfPipelineOptions(accelerator_options=AcceleratorOptions(device=device), do_ocr=scanned,
+                              ocr_options=RapidOcrOptions(backend="torch", force_full_page_ocr=True,
+                                                          rapidocr_params={"Global.log_level": "warning"}))
     converter = DocumentConverter(format_options={InputFormat.PDF: PdfFormatOption(pipeline_options=opts)})
     result = converter.convert(pdf_path)
     body = result.document.export_to_markdown()
