@@ -18,14 +18,15 @@
 """
 Spec: PDF to one markdown cache file. docling gives the structure, PyMuPDF restores the text of
 formulas docling leaves undecoded (matched by page position) and fixes ligatures, hyphenation and
-unreadable glyphs. Scanned PDFs have no text layer, so they use RapidOCR and docling formula recognition.
+unreadable glyphs. PDFs whose text layer is missing or disagrees with OCR use RapidOCR and docling formula recognition.
 Goal: a deterministic file whose unresolved spots are reported in the side-car, never guessed.
 """
-import argparse, collections, logging, os, re, sys, tempfile, warnings
+import argparse, collections, difflib, logging, os, re, sys, tempfile, warnings
 
 UNDECODED = "<!-- formula-not-decoded -->"
 MARK = "⟦?⟧"
-SCANNED_CHARS_PER_PAGE = 100
+SPARSE_CHARS_PER_PAGE = 100
+LAYER_MATCH_RATIO = 0.5
 BAR = "=" * 70
 LIGATURES = {"ﬀ": "ff", "ﬁ": "fi", "ﬂ": "fl", "ﬃ": "ffi", "ﬄ": "ffl", "ﬅ": "st", "ﬆ": "st"}
 SPACES = {"\u2011": "-", "\u00ad": "", "\u00a0": " ", "\u2002": " ", "\u2009": " ", "\u200a": " ", "\u202f": " "}
@@ -88,7 +89,7 @@ def formula_text(pdf_doc, item, glyph_map):
     page = pdf_doc[prov.page_no - 1]
     left, top, right, bottom = prov.bbox.to_top_left_origin(page.rect.height).as_tuple()
     clip = fitz.Rect(left - 2, top - 2, right + 2, bottom + 2)
-    return " ".join(clean(" ".join(line_texts(page, glyph_map, clip)), collections.Counter()).split())
+    return " ".join(" ".join(line_texts(page, glyph_map, clip)).split())
 
 
 def fill_formulas(body, recovered):
@@ -107,15 +108,52 @@ def select_pages(pdf, pages, workdir):
     pdf_doc = fitz.open(pdf)
     if not pages:
         return pdf_doc, pdf, 1
-    first, last = (int(x) for x in pages.split("-"))
+    match = re.fullmatch(r"(\d+)-(\d+)", pages)
+    first, last = (int(x) for x in match.groups()) if match else (0, 0)
+    if not 1 <= first <= last <= pdf_doc.page_count:
+        sys.exit(f"--pages는 a-b 형식이고 1 ≤ a ≤ b ≤ {pdf_doc.page_count}쪽이어야 한다: {pages}")
     pdf_doc.select(range(first - 1, last))
     path = os.path.join(workdir, "selection.pdf")
     pdf_doc.save(path)
     return pdf_doc, path, first
 
 
-def is_scanned(pdf_doc):
-    return sum(len(page.get_text()) for page in pdf_doc) / pdf_doc.page_count < SCANNED_CHARS_PER_PAGE
+def sparse_pages(pdf_doc):
+    return [n for n, page in enumerate(pdf_doc) if len(page.get_text()) < SPARSE_CHARS_PER_PAGE]
+
+
+def text_similarity(a, b):
+    a, b = (re.sub(r"[^a-z0-9]", "", s.lower()) for s in (a, b))
+    return difflib.SequenceMatcher(None, a, b, autojunk=False).ratio() if a and b else 0.0
+
+
+def ocr_page_texts(pdf_doc, indices, device, workdir):
+    import fitz
+
+    sample = fitz.open()
+    for i in indices:
+        sample.insert_pdf(pdf_doc, from_page=i, to_page=i)
+    path = os.path.join(workdir, "sample.pdf")
+    sample.save(path)
+    document = docling_converter(device, ocr=True, formulas=False).convert(path).document
+    texts = collections.defaultdict(list)
+    for item in document.texts:
+        texts[item.prov[0].page_no].append(item.text)
+    return [" ".join(texts[n + 1]) for n in range(len(indices))]
+
+
+def needs_ocr(pdf_doc, device, workdir):
+    last = pdf_doc.page_count - 1
+    sampled = sorted({0, last // 2, last})
+    layers = {i: pdf_doc[i].get_text() for i in sampled}
+    empty = [i for i in sampled if len(layers[i]) < SPARSE_CHARS_PER_PAGE]
+    if len(empty) * 2 >= len(sampled):
+        return True, f"표본 {len(sampled)}쪽 중 {len(empty)}쪽에 텍스트 레이어 없음"
+    kept = [i for i in sampled if i not in empty]
+    ratios = [text_similarity(layers[i], ocr) for i, ocr in zip(kept, ocr_page_texts(pdf_doc, kept, device, workdir))]
+    agreeing = sum(r >= LAYER_MATCH_RATIO for r in ratios)
+    detail = "텍스트 레이어와 OCR 유사도 " + ", ".join(f"{r:.2f}" for r in ratios)
+    return agreeing * 2 < len(ratios), detail
 
 
 def pick_device():
@@ -126,25 +164,26 @@ def pick_device():
         return "cuda" if torch.cuda.is_available() else "cpu"
 
 
-def docling_document(path, scanned, device):
+def docling_converter(device, ocr, formulas):
     from docling.datamodel.accelerator_options import AcceleratorOptions
     from docling.datamodel.base_models import InputFormat
     from docling.datamodel.pipeline_options import PdfPipelineOptions, RapidOcrOptions
     from docling.document_converter import DocumentConverter, PdfFormatOption
 
-    ocr = RapidOcrOptions(backend="torch", force_full_page_ocr=True, rapidocr_params={"Global.log_level": "warning"})
-    options = PdfPipelineOptions(accelerator_options=AcceleratorOptions(device=device), ocr_options=ocr,
-                                 do_ocr=scanned, do_formula_enrichment=scanned)
-    converter = DocumentConverter(format_options={InputFormat.PDF: PdfFormatOption(pipeline_options=options)})
-    return converter.convert(path).document
+    rapid = RapidOcrOptions(backend="torch", force_full_page_ocr=True, rapidocr_params={"Global.log_level": "warning"})
+    options = PdfPipelineOptions(accelerator_options=AcceleratorOptions(device=device), ocr_options=rapid,
+                                 do_ocr=ocr, do_formula_enrichment=formulas)
+    return DocumentConverter(format_options={InputFormat.PDF: PdfFormatOption(pipeline_options=options)})
 
 
-def side_car(body, formulas_found, formulas_filled):
+def side_car(body, placeholders, items, thin_pages):
     notes = []
-    if formulas_found and not formulas_filled:
-        notes.append(f"[수식] {formulas_found}개 formula-not-decoded 미복원 (쪽 위치로 복원하지 못함)")
+    if placeholders != items:
+        notes.append(f"[수식] 자리표시자 {placeholders}개, 수식 항목 {items}개로 달라 교체하지 않음")
     elif body.count(UNDECODED):
         notes.append(f"[수식] {body.count(UNDECODED)}개 formula-not-decoded 남음 (해당 영역에 PyMuPDF 텍스트 없음)")
+    if thin_pages:
+        notes.append(f"[쪽] 글자 {SPARSE_CHARS_PER_PAGE}자 미만: p.{', p.'.join(map(str, thin_pages))} (그림 쪽이 아니라면 본문 누락)")
     notes += [f"[{MARK}] …{body[max(0, m.start() - 40):m.end() + 40]}…".replace("\n", " ")
               for m in re.finditer(re.escape(MARK), body)]
     return notes
@@ -153,17 +192,21 @@ def side_car(body, formulas_found, formulas_filled):
 def convert(pdf, pages, glyph_map):
     with tempfile.TemporaryDirectory() as workdir:
         pdf_doc, path, first = select_pages(pdf, pages, workdir)
-        scanned, device = is_scanned(pdf_doc), pick_device()
-        print(f"[device] {device}\n[ocr] {'on' if scanned else 'off'}", file=sys.stderr)
-        document = docling_document(path, scanned, device)
+        device = pick_device()
+        scanned, why = needs_ocr(pdf_doc, device, workdir)
+        print(f"[device] {device}\n[ocr] {'on' if scanned else 'off'} ({why})", file=sys.stderr)
+        document = docling_converter(device, ocr=scanned, formulas=scanned).convert(path).document
 
     items = undecoded_formulas(document)
-    body, filled = fill_formulas(document.export_to_markdown(), [formula_text(pdf_doc, i, glyph_map) for i in items])
+    markdown = document.export_to_markdown()
+    placeholders = markdown.count(UNDECODED)
+    body, filled = fill_formulas(markdown, [formula_text(pdf_doc, i, glyph_map) for i in items])
     stats = collections.Counter(formulas_found=len(items), formulas_filled=filled, scanned=scanned)
     body = clean(body, stats)
+    thin_pages = [] if scanned else [first + n for n in sparse_pages(pdf_doc)]
     dump = "\n".join(f"<<<p{first + n}>>>\n" + clean("\n".join(line_texts(page, glyph_map)), collections.Counter())
                      for n, page in enumerate(pdf_doc))
-    return body, stats, side_car(body, len(items), filled), dump
+    return body, stats, side_car(body, placeholders, len(items), thin_pages), dump
 
 
 def header(cite, pages, stats):
@@ -236,6 +279,23 @@ def selftest():
     assert fill_formulas(f"a {UNDECODED} b {UNDECODED} c", ["x=1", "y=2"]) == ("a x=1 b y=2 c", 2)
     assert fill_formulas(f"a {UNDECODED} b {UNDECODED} c", ["x=1", ""]) == (f"a x=1 b {UNDECODED} c", 1)
     assert fill_formulas(f"a {UNDECODED} b", ["x=1", "y=2"]) == (f"a {UNDECODED} b", 0)
+    assert text_similarity("Hello, World 1", "hello world 1") == 1.0 and text_similarity("abc", "") == 0.0
+    assert text_similarity("battery model voltage", "zzzz qqqq xxxx") < LAYER_MATCH_RATIO
+    import fitz
+
+    blank = fitz.open()
+    for _ in range(3):
+        blank.new_page()
+    assert needs_ocr(blank, "cpu", "")[0] is True and sparse_pages(blank) == [0, 1, 2]
+    with tempfile.TemporaryDirectory() as workdir:
+        blank.save(os.path.join(workdir, "b.pdf"))
+        for bad in ("3", "3-2", "0-1", "2-9", "a-b"):
+            try:
+                select_pages(os.path.join(workdir, "b.pdf"), bad, workdir)
+            except SystemExit:
+                continue
+            raise AssertionError(bad)
+        assert select_pages(os.path.join(workdir, "b.pdf"), "2-3", workdir)[0].page_count == 2
     print("selftest ok")
 
 
@@ -257,8 +317,9 @@ def main():
     parser.add_argument("--glyph", action="append", default=[], metavar="FONT:0xHH=CHAR")
     parser.add_argument("--fitz-dump")
     args = parser.parse_args()
-    if os.path.exists(args.out) and not args.force:
-        sys.exit(f"{args.out} 이미 있음 — 덮으려면 --force")
+    for target in (args.out, args.fitz_dump):
+        if target and os.path.exists(target) and not args.force:
+            sys.exit(f"{target} 이미 있음 — 덮으려면 --force")
     body, stats, notes, dump = convert(args.pdf, args.pages, parse_glyphs(args.glyph))
     if args.fitz_dump:
         with open(args.fitz_dump, "w", encoding="utf-8") as f:

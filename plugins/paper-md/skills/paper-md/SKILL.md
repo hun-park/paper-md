@@ -14,22 +14,24 @@ uv run --script --locked ${CLAUDE_SKILL_DIR}/paper_md.py <pdf> <out.md> \
 - `--cite`는 직접 쓴다. 헤더에 들어간다.
 - `--pages a-b`는 발췌. 헤더에 `p.a-b 발췌`로 적힌다.
 - 기존 md가 있으면 멈춘다. `--force`로 덮어쓴다.
-- `--fitz-dump`는 PyMuPDF 페이지 본문(`<<<pN>>>` 구분)을 쓴다. 수식 확인 참조용이다.
+- `--fitz-dump`는 `--force` 없이는 덮어쓰지 않는다. PyMuPDF 페이지 본문(`<<<pN>>>` 구분)을 쓴다. 수식 확인 참조용이다.
 - 자가검증: `paper_md.py --selftest`.
 
 ## 동작
 
 | 단계 | 내용 |
 |---|---|
-| 장치·OCR 판정 | CUDA가 있으면 GPU, 없으면 CPU. 쪽당 글자 수가 100 미만이면 스캔본으로 보고 RapidOCR과 docling 수식 인식(LaTeX `$$…$$`)을 켠다. stderr에 `[device]`, `[ocr] on/off` |
+| 장치·OCR 판정 | CUDA가 있으면 GPU, 없으면 CPU. 처음·중간·끝 쪽을 표본으로, 글자가 100자 미만인 쪽이 절반 이상이거나 텍스트 레이어와 OCR 결과의 유사도(0.5 이상)가 맞는 쪽이 절반 미만이면 RapidOCR과 docling 수식 인식(LaTeX `$$…$$`)을 켠다. stderr에 `[device]`, `[ocr] on/off (사유)` |
 | docling 본문 추출 | 섹션·리스트·캡션이 분리된 markdown. 수식은 `<!-- formula-not-decoded -->`로 남는다 |
 | PyMuPDF 수식 복원 | 자리표시자마다 docling이 준 쪽 위치(bbox)의 PyMuPDF 텍스트(글리프 매핑 적용)로 교체. 자리표시자 수와 수식 수가 다르면 교체하지 않는다 |
 | 정리 | 하이픈 병합, 리가처, 특수 공백·soft hyphen 정규화 |
-| `⟦?⟧` 표시 | 복원되지 않은 C0 제어문자, U+FFFD, 비공개 영역 글리프 |
+| `⟦?⟧` 표시 | 복원되지 않은 C0 제어문자, U+FFFD, 비공개 영역 글리프, `(cid:N)` 토큰 |
 
 ## 사이드카 (stdout)
 
-- `[수식] N개 formula-not-decoded 남음` — 교체하지 못한 수식. PDF를 보고 수동 삽입.
+- `[수식] 자리표시자 N개, 수식 항목 M개로 달라 교체하지 않음` — 개수가 안 맞아 문서 전체의 수식 교체를 포기한 것. PDF를 보고 수동 삽입.
+- `[수식] N개 formula-not-decoded 남음` — 해당 위치에 PyMuPDF 텍스트가 없어 교체하지 못한 수식. PDF를 보고 수동 삽입.
+- `[쪽] 글자 100자 미만: p.N` — OCR이 꺼진 상태에서 글자가 거의 없는 쪽. 그림 쪽이 아니라면 본문 누락.
 - `[⟦?⟧] …` — 소실 글리프와 앞뒤 40자. 문맥으로 확정되면 복원하고, 아니면 `⟦?⟧`로 둔다.
 
 ## 글리프 판정 (`--scan`, `--crop`, `--glyph`)

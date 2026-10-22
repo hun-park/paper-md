@@ -5,7 +5,7 @@
   "plugins": [
     {
       "name": "paper-md",
-      "description": "refs-md skill: PDF to markdown cache for reference papers.",
+      "description": "paper-md skill: convert paper PDFs to markdown.",
       "source": "./plugins/paper-md",
       "category": "research"
     }
