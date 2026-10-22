@@ -1,6 +1,6 @@
 {
   "name": "paper-md",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "description": "refs-md skill: PDF to markdown cache for reference papers (docling + PyMuPDF equation recovery).",
   "author": { "name": "hun-park" }
 }

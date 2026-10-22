@@ -132,7 +132,7 @@ def convert(pdf, pages=None, gmap=None):
     print(f"[device] {device}", file=sys.stderr)
     scanned = sum(len(p.get_text()) for p in doc) / n < SCANNED_CHARS_PER_PAGE
     print(f"[ocr] {'on' if scanned else 'off'}", file=sys.stderr)
-    opts = PdfPipelineOptions(accelerator_options=AcceleratorOptions(device=device), do_ocr=scanned,
+    opts = PdfPipelineOptions(accelerator_options=AcceleratorOptions(device=device), do_ocr=scanned, do_formula_enrichment=scanned,
                               ocr_options=RapidOcrOptions(backend="torch", force_full_page_ocr=True,
                                                           rapidocr_params={"Global.log_level": "warning"}))
     converter = DocumentConverter(format_options={InputFormat.PDF: PdfFormatOption(pipeline_options=opts)})
