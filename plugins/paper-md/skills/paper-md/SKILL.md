@@ -30,7 +30,7 @@ uv run --script --locked $S/paper_md.py <pdf> <out.md> \
 |---|---|
 | OCR 자동 판정 | 쪽당 글자 수가 100 미만이면 스캔본으로 보고 RapidOCR(torch)로 전체 쪽 OCR + docling 수식 인식(LaTeX `$$…$$`)을 켜고, 아니면 끈다(텍스트 PDF 수식은 PyMuPDF 복원). stderr에 `[ocr] on/off` |
 | docling 본문 추출 | PDF → 구조화된 markdown (섹션·리스트·캡션 분리). 수식은 `<!-- formula-not-decoded -->`로 표시 |
-| PyMuPDF 수식 복원 | `<!-- formula-not-decoded -->` 자리표시자를 PyMuPDF에서 추출한 번호 붙은 수식 텍스트로 교체 |
+| PyMuPDF 수식 복원 | `<!-- formula-not-decoded -->` 자리표시자마다 docling이 준 쪽 위치(bbox)의 PyMuPDF 텍스트(글리프 매핑 적용)로 교체. 자리표시자 수와 수식 수가 다르면 교체하지 않는다 |
 | 하이픈 병합·리가처·특수 공백 | `com-\nplex`→`complex`, `ﬁ`→`fi`, 비분리 하이픈·soft hyphen·얇은 공백 정규화 |
 | 소실 글리프 표시 `⟦?⟧` | C0 제어문자, U+FFFD, 기호 폰트 PUA 중 복원되지 않은 것 |
 
@@ -44,7 +44,7 @@ uv run --script --locked $S/paper_md.py <pdf> <out.md> \
 
 ## 2. 사이드카 (stdout)
 
-- `[수식] N개 미복원 formula-not-decoded 남음` — PyMuPDF 번호 수식과 매칭되지 않은 것. PDF를 보고 수동 삽입.
+- `[수식] N개 formula-not-decoded 남음` — 해당 위치에 PyMuPDF 텍스트가 없거나 자리표시자 수가 맞지 않아 교체하지 못한 것. PDF를 보고 수동 삽입.
 - `[⟦?⟧] …` — 소실 글리프와 앞뒤 40자. 문맥으로 확정되면 복원. 확정되지 않으면 `⟦?⟧`로 둔다.
 
 ## 3. 글리프 판정 (`--scan`, `--crop`, `--glyph`)
