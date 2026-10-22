@@ -258,7 +258,7 @@ def main():
     parser.add_argument("--fitz-dump")
     args = parser.parse_args()
     if os.path.exists(args.out) and not args.force:
-        sys.exit(f"{args.out} 이미 있음 — REFS는 gitignored라 덮으면 복구 불가. 백업 후 --force")
+        sys.exit(f"{args.out} 이미 있음 — 덮으려면 --force")
     body, stats, notes, dump = convert(args.pdf, args.pages, parse_glyphs(args.glyph))
     if args.fitz_dump:
         with open(args.fitz_dump, "w", encoding="utf-8") as f:
