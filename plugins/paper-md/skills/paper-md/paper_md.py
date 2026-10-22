@@ -16,9 +16,9 @@
 # torchvision = { index = "pytorch-cu128" }
 # ///
 """
-Spec: PDF to one markdown cache file. docling gives the structure, PyMuPDF restores the text of
-formulas docling leaves undecoded (matched by page position) and fixes ligatures, hyphenation and
-unreadable glyphs. PDFs with almost no text layer use RapidOCR and docling formula recognition.
+Spec: PDF to one markdown cache file. docling gives the structure and recognizes formulas as LaTeX;
+PyMuPDF supplies equation numbers, replaces formulas the recognizer got visibly wrong, and fixes ligatures,
+hyphenation and unreadable glyphs. PDFs with almost no text layer also use RapidOCR.
 Goal: a deterministic file whose unresolved spots are reported in the side-car, never guessed.
 """
 import argparse, collections, logging, os, re, sys, tempfile, warnings
@@ -31,6 +31,12 @@ SAMPLE_LINES = ["The battery terminal voltage depends on the internal resistance
                 "Charging current raises the state of charge while the voltage relaxes slowly.",
                 "Parameters are identified from the measured response to current pulses."]
 SAMPLE_WORDS = ["resistance", "charging", "relaxes", "identified", "pulses"]
+EQUATION_NUMBER = re.compile(r"\((\d{1,3})\)\s*$")
+LATEX_TAIL = re.compile(r"(?:\s*(?:\\\\|&))+\s*$")
+EMPTY_ROW = re.compile(r"\\\\\s*&\s*\\\\.*", re.S)
+ENVIRONMENT = re.compile(r"\\begin\{(\w+)\}.*?\\end\{\1\}", re.S)
+LATEX_RUN = re.compile(r"(\S+)(?: \1){11,}")
+MAX_LATEX_TO_LAYER = 8
 LIGATURES = {"ﬀ": "ff", "ﬁ": "fi", "ﬂ": "fl", "ﬃ": "ffi", "ﬄ": "ffl", "ﬅ": "st", "ﬆ": "st"}
 SPACES = {"\u2011": "-", "\u00ad": "", "\u00a0": " ", "\u2002": " ", "\u2009": " ", "\u200a": " ", "\u202f": " "}
 UNREADABLE = re.compile(r"[\x00-\x08\x0b-\x0d\x0e-\x1f\ufffd\ue000-\uf8ff]|\(cid:\d+\)")
@@ -78,11 +84,10 @@ def clean(text, stats):
     return UNREADABLE.sub(MARK, text)
 
 
-def undecoded_formulas(document):
+def formula_items(document):
     from docling_core.types.doc import DocItemLabel
 
-    return [item for item, _ in document.iterate_items()
-            if getattr(item, "label", None) == DocItemLabel.FORMULA and not item.text]
+    return [item for item, _ in document.iterate_items() if getattr(item, "label", None) == DocItemLabel.FORMULA]
 
 
 def formula_text(pdf_doc, item, glyph_map):
@@ -93,6 +98,29 @@ def formula_text(pdf_doc, item, glyph_map):
     left, top, right, bottom = prov.bbox.to_top_left_origin(page.rect.height).as_tuple()
     clip = fitz.Rect(left - 2, top - 2, right + 2, bottom + 2)
     return " ".join(" ".join(line_texts(page, glyph_map, clip)).split())
+
+
+def tidy_latex(latex):
+    cut = EMPTY_ROW.search(latex)
+    if cut and latex[:cut.start()].count("\\begin") == latex[:cut.start()].count("\\end"):
+        latex = latex[:cut.start()]
+    latex = LATEX_TAIL.sub("", latex).strip()
+    outside = ENVIRONMENT.sub("", latex)
+    return f"\\begin{{aligned}} {latex} \\end{{aligned}}" if "&" in outside or "\\\\" in outside else latex
+
+
+def is_degenerate(latex, layer):
+    return bool(LATEX_RUN.search(latex)) or (bool(layer) and len(latex) > MAX_LATEX_TO_LAYER * len(layer))
+
+
+def refine_formulas(document, pdf_doc, glyph_map):
+    items = formula_items(document)
+    layers = [formula_text(pdf_doc, item, glyph_map) for item in items]
+    for item, layer in zip(items, layers):
+        latex = tidy_latex(item.text)
+        number = EQUATION_NUMBER.search(layer)
+        item.text = "" if is_degenerate(latex, layer) else f"{latex} \\tag{{{number.group(1)}}}" if latex and number else latex
+    return [layer for item, layer in zip(items, layers) if not item.text], len(items)
 
 
 def fill_formulas(body, recovered):
@@ -138,7 +166,7 @@ def pick_device():
         return "cuda" if torch.cuda.is_available() else "cpu"
 
 
-def docling_converter(device, ocr, formulas):
+def docling_converter(device, ocr):
     from docling.datamodel.accelerator_options import AcceleratorOptions
     from docling.datamodel.base_models import InputFormat
     from docling.datamodel.pipeline_options import PdfPipelineOptions, RapidOcrOptions
@@ -146,14 +174,14 @@ def docling_converter(device, ocr, formulas):
 
     rapid = RapidOcrOptions(backend="torch", force_full_page_ocr=True, rapidocr_params={"Global.log_level": "warning"})
     options = PdfPipelineOptions(accelerator_options=AcceleratorOptions(device=device), ocr_options=rapid,
-                                 do_ocr=ocr, do_formula_enrichment=formulas)
+                                 do_ocr=ocr, do_formula_enrichment=True)
     return DocumentConverter(format_options={InputFormat.PDF: PdfFormatOption(pipeline_options=options)})
 
 
-def side_car(body, placeholders, items, filled, scanned, thin_pages):
+def side_car(body, placeholders, fallbacks, recognized, filled, scanned, thin_pages):
     notes = []
-    if placeholders != items:
-        notes.append(f"[수식] 자리표시자 {placeholders}개, 수식 항목 {items}개로 달라 교체하지 않음")
+    if placeholders != fallbacks:
+        notes.append(f"[수식] 자리표시자 {placeholders}개, 대체할 수식 {fallbacks}개로 달라 교체하지 않음")
     elif body.count(UNDECODED):
         notes.append(f"[수식] {body.count(UNDECODED)}개 formula-not-decoded 남음 (해당 영역에 PyMuPDF 텍스트 없음)")
     if thin_pages:
@@ -161,9 +189,11 @@ def side_car(body, placeholders, items, filled, scanned, thin_pages):
     notes += [f"[{MARK}] …{body[max(0, m.start() - 40):m.end() + 40]}…".replace("\n", " ")
               for m in re.finditer(re.escape(MARK), body)]
     if filled:
-        notes.append(f"[확인] 수식 {filled}개는 PyMuPDF 텍스트라 읽기 순서가 흩어질 수 있음. 인용 전 PDF와 대조")
+        notes.append(f"[확인] 수식 {filled}개는 LaTeX 인식이 어긋나 PyMuPDF 텍스트로 대체함(읽기 순서가 흩어질 수 있음). PDF와 대조")
+    if recognized:
+        notes.append(f"[확인] 수식 {recognized}개는 모델이 인식한 LaTeX라 첨자·기호 오인식이 있을 수 있음. 인용 전 PDF와 대조")
     if scanned:
-        notes.append("[확인] OCR·수식 인식 결과라 글자와 첨자 오류가 있을 수 있음. 인용 전 PDF와 대조")
+        notes.append("[확인] 본문은 OCR 결과라 글자 오류가 있을 수 있음. 인용 전 PDF와 대조")
     return ([f"[판독 요청] 아래 {len(notes)}건은 PDF를 보고 사람이 확인해야 한다"] + notes) if notes else []
 
 
@@ -173,25 +203,27 @@ def convert(pdf, pages, glyph_map):
         device = pick_device()
         scanned, why = needs_ocr(pdf_doc)
         print(f"[device] {device}\n[ocr] {'on' if scanned else 'off'} ({why})", file=sys.stderr)
-        document = docling_converter(device, ocr=scanned, formulas=scanned).convert(path).document
+        document = docling_converter(device, ocr=scanned).convert(path).document
 
-    items = undecoded_formulas(document)
+    fallbacks, formulas = refine_formulas(document, pdf_doc, glyph_map)
     markdown = document.export_to_markdown()
     placeholders = markdown.count(UNDECODED)
-    body, filled = fill_formulas(markdown, [formula_text(pdf_doc, i, glyph_map) for i in items])
-    stats = collections.Counter(formulas_found=len(items), formulas_filled=filled, scanned=scanned)
+    body, filled = fill_formulas(markdown, fallbacks)
+    recognized = formulas - len(fallbacks)
+    stats = collections.Counter(formulas=formulas, recognized=recognized, filled=filled, scanned=scanned)
     body = clean(body, stats)
     thin_pages = [] if scanned else [first + n for n in sparse_pages(pdf_doc)]
     dump = "\n".join(f"<<<p{first + n}>>>\n" + clean("\n".join(line_texts(page, glyph_map)), collections.Counter())
                      for n, page in enumerate(pdf_doc))
-    return body, stats, side_car(body, placeholders, len(items), filled, scanned, thin_pages), dump
+    return body, stats, side_car(body, placeholders, len(fallbacks), recognized, filled, scanned, thin_pages), dump
 
 
 def header(cite, pages, stats):
     scope = f"p.{pages} 발췌" if pages else "full text extraction"
     steps = [f"docling 구조 추출{f' (p.{pages})' if pages else ''}",
-             "RapidOCR·docling 수식 인식" if stats["scanned"] else "",
-             f"수식 {stats['formulas_filled']}/{stats['formulas_found']}개 PyMuPDF 복원" if stats["formulas_found"] else "",
+             "RapidOCR" if stats["scanned"] else "",
+             f"수식 {stats['recognized']}/{stats['formulas']}개 LaTeX 인식" if stats["formulas"] else "",
+             f"수식 {stats['filled']}개 PyMuPDF 텍스트 대체" if stats["filled"] else "",
              f"하이픈 병합 {stats['hyphen']}" if stats["hyphen"] else "",
              f"리가처 {stats['ligature']}" if stats["ligature"] else "",
              f"특수 공백·하이픈 정규화 {stats['unicode']}" if stats["unicode"] else "",
@@ -257,6 +289,11 @@ def selftest():
     assert fill_formulas(f"a {UNDECODED} b {UNDECODED} c", ["x=1", "y=2"]) == ("a x=1 b y=2 c", 2)
     assert fill_formulas(f"a {UNDECODED} b {UNDECODED} c", ["x=1", ""]) == (f"a x=1 b {UNDECODED} c", 1)
     assert fill_formulas(f"a {UNDECODED} b", ["x=1", "y=2"]) == (f"a {UNDECODED} b", 0)
+    assert tidy_latex("x = 1 \\\\ & \\\\ &") == "x = 1" and tidy_latex("a \\frac { b } { c }") == "a \\frac { b } { c }"
+    assert tidy_latex("a & = b \\\\ & \\\\ c & = d") == "\\begin{aligned} a & = b \\end{aligned}"
+    assert tidy_latex("\\begin{cases} a & b \\\\ & \\\\ c \\end{cases}") == "\\begin{cases} a & b \\\\ & \\\\ c \\end{cases}"
+    assert is_degenerate("c " * 30, "J[k]") and is_degenerate("x" * 90, "ab") and not is_degenerate("x = 1", "x = 1 (3)")
+    assert EQUATION_NUMBER.search("Q[k] = J[k] · Qp[k], (13)").group(1) == "13" and not EQUATION_NUMBER.search("y(k) = 3")
     import fitz
 
     blank = fitz.open()
@@ -319,7 +356,7 @@ def main():
     with open(args.out, "w", encoding="utf-8") as f:
         f.write(header(args.cite, args.pages, stats) + body)
     print(f"wrote {args.out}: {len(body.splitlines())} lines, "
-          f"formulas={stats['formulas_filled']}/{stats['formulas_found']}, marks={stats['mark']}")
+          f"formulas={stats['recognized']}+{stats['filled']}/{stats['formulas']}, marks={stats['mark']}")
     print("\n".join(notes) if notes else "(사이드카 없음)")
 
 
