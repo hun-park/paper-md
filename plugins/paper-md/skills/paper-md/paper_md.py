@@ -27,6 +27,10 @@ UNDECODED = "<!-- formula-not-decoded -->"
 MARK = "⟦?⟧"
 SPARSE_CHARS_PER_PAGE = 100
 BAR = "=" * 70
+SAMPLE_LINES = ["The battery terminal voltage depends on the internal resistance of the cell.",
+                "Charging current raises the state of charge while the voltage relaxes slowly.",
+                "Parameters are identified from the measured response to current pulses."]
+SAMPLE_WORDS = ["resistance", "charging", "relaxes", "identified", "pulses"]
 LIGATURES = {"ﬀ": "ff", "ﬁ": "fi", "ﬂ": "fl", "ﬃ": "ffi", "ﬄ": "ffl", "ﬅ": "st", "ﬆ": "st"}
 SPACES = {"\u2011": "-", "\u00ad": "", "\u00a0": " ", "\u2002": " ", "\u2009": " ", "\u200a": " ", "\u202f": " "}
 UNREADABLE = re.compile(r"[\x00-\x08\x0b-\x0d\x0e-\x1f\ufffd\ue000-\uf8ff]|\(cid:\d+\)")
@@ -146,7 +150,7 @@ def docling_converter(device, ocr, formulas):
     return DocumentConverter(format_options={InputFormat.PDF: PdfFormatOption(pipeline_options=options)})
 
 
-def side_car(body, placeholders, items, thin_pages):
+def side_car(body, placeholders, items, filled, scanned, thin_pages):
     notes = []
     if placeholders != items:
         notes.append(f"[수식] 자리표시자 {placeholders}개, 수식 항목 {items}개로 달라 교체하지 않음")
@@ -156,7 +160,11 @@ def side_car(body, placeholders, items, thin_pages):
         notes.append(f"[쪽] 글자 {SPARSE_CHARS_PER_PAGE}자 미만: p.{', p.'.join(map(str, thin_pages))} (그림 쪽이 아니라면 본문 누락)")
     notes += [f"[{MARK}] …{body[max(0, m.start() - 40):m.end() + 40]}…".replace("\n", " ")
               for m in re.finditer(re.escape(MARK), body)]
-    return notes
+    if filled:
+        notes.append(f"[확인] 수식 {filled}개는 PyMuPDF 텍스트라 읽기 순서가 흩어질 수 있음. 인용 전 PDF와 대조")
+    if scanned:
+        notes.append("[확인] OCR·수식 인식 결과라 글자와 첨자 오류가 있을 수 있음. 인용 전 PDF와 대조")
+    return ([f"[판독 요청] 아래 {len(notes)}건은 PDF를 보고 사람이 확인해야 한다"] + notes) if notes else []
 
 
 def convert(pdf, pages, glyph_map):
@@ -176,7 +184,7 @@ def convert(pdf, pages, glyph_map):
     thin_pages = [] if scanned else [first + n for n in sparse_pages(pdf_doc)]
     dump = "\n".join(f"<<<p{first + n}>>>\n" + clean("\n".join(line_texts(page, glyph_map)), collections.Counter())
                      for n, page in enumerate(pdf_doc))
-    return body, stats, side_car(body, placeholders, len(items), thin_pages), dump
+    return body, stats, side_car(body, placeholders, len(items), filled, scanned, thin_pages), dump
 
 
 def header(cite, pages, stats):
@@ -256,14 +264,30 @@ def selftest():
         blank.new_page()
     assert needs_ocr(blank)[0] is True and sparse_pages(blank) == [0, 1, 2]
     with tempfile.TemporaryDirectory() as workdir:
-        blank.save(os.path.join(workdir, "b.pdf"))
+        path = os.path.join(workdir, "text.pdf")
+        text_pdf = fitz.open()
+        page = text_pdf.new_page()
+        for n, line in enumerate(SAMPLE_LINES):
+            page.insert_text((72, 100 + 20 * n), line, fontsize=11)
+        text_pdf.save(path)
         for bad in ("3", "3-2", "0-1", "2-9", "a-b"):
             try:
-                select_pages(os.path.join(workdir, "b.pdf"), bad, workdir)
+                select_pages(path, bad, workdir)
             except SystemExit:
                 continue
             raise AssertionError(bad)
-        assert select_pages(os.path.join(workdir, "b.pdf"), "2-3", workdir)[0].page_count == 2
+        assert select_pages(path, "1-1", workdir)[0].page_count == 1
+
+        scan_path = os.path.join(workdir, "scan.pdf")
+        scan_pdf = fitz.open()
+        scan_page = scan_pdf.new_page()
+        scan_page.insert_image(scan_page.rect, stream=text_pdf[0].get_pixmap(dpi=150).tobytes("png"))
+        scan_pdf.save(scan_path)
+        for pdf, expect_scanned, needed in ((path, False, len(SAMPLE_WORDS)), (scan_path, True, 3)):
+            body, stats, notes, _ = convert(pdf, None, {})
+            found = [w for w in SAMPLE_WORDS if w in body.lower()]
+            assert bool(stats["scanned"]) is expect_scanned and len(found) >= needed, (pdf, found, body)
+            assert bool(notes) is expect_scanned, notes
     print("selftest ok")
 
 
