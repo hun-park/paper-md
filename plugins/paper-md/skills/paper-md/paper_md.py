@@ -1,10 +1,19 @@
 #!/usr/bin/env -S uv run --script
 # /// script
 # requires-python = "==3.12.*"
-# dependencies = ["docling==2.129.0", "pymupdf==1.27.2.3"]
+# dependencies = ["docling==2.129.0", "pymupdf==1.27.2.3", "torch==2.11.0", "torchvision==0.26.0"]
 #
 # [tool.uv]
 # exclude-newer = "2026-10-22T00:00:00Z"
+#
+# [[tool.uv.index]]
+# name = "pytorch-cu128"
+# url = "https://download.pytorch.org/whl/cu128"
+# explicit = true
+#
+# [tool.uv.sources]
+# torch = { index = "pytorch-cu128" }
+# torchvision = { index = "pytorch-cu128" }
 # ///
 """REFS 캐시 생성 — PDF → md.  ① docling 본문 구조  ② pymupdf 수식·글리프 보완.
 
